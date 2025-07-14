@@ -1,0 +1,264 @@
+---
+title: "Labour market" 
+author: "Valentin"
+date: "2025-02-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Import & Cleaning}
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(readr)
+
+# Import
+labour_force <- read_csv("labour force population.csv")
+employment_rate <- read_csv("employment rate.csv")
+unemployment_pop <- read_csv("unemployed population.csv")
+skills_data <- read.csv("Skills ask.csv")
+wage_data <- read.csv("Avg_Wage.csv")
+
+country_mapping <- c("AUS" = "Australia", "AUT" = "Austria", "BEL" = "Belgium", "CAN" = "Canada",
+                     "CHE" = "Switzerland", "CHL" = "Chile", "COL" = "Colombia", "CRI" = "Costa Rica",
+                     "CZE" = "Czech Republic", "DEU" = "Germany", "DNK" = "Denmark", "ESP" = "Spain",
+                     "EST" = "Estonia", "FIN" = "Finland", "FRA" = "France", "GRC" = "Greece",
+                     "HUN" = "Hungary", "IRL" = "Ireland", "ISL" = "Iceland", "ISR" = "Israel",
+                     "ITA" = "Italy", "JPN" = "Japan", "KOR" = "South Korea", "LTU" = "Lithuania",
+                     "LUX" = "Luxembourg", "LVA" = "Latvia", "MEX" = "Mexico", "NLD" = "Netherlands",
+                     "NOR" = "Norway", "NZL" = "New Zealand", "POL" = "Poland", "PRT" = "Portugal",
+                     "SVK" = "Slovakia", "SVN" = "Slovenia", "SWE" = "Sweden", "TUR" = "Turkey",
+                     "GBR" = "United Kingdom", "USA" = "United States")
+
+age_mapping <- c("Y15T24" = "From 15 to 24 years",
+                 "Y25T54" = "From 25 to 54 years",
+                 "Y55T64" = "From 55 to 64 years")
+
+# Cleaning Part 1
+clean_data <- function(df, value_col_name) {
+    df %>%
+      rename(Country = REF_AREA, Year = TIME_PERIOD, Age = AGE, Value = OBS_VALUE) %>%
+      mutate(
+          Country = country_mapping[Country],  
+          Age = age_mapping[Age],              
+          Value = round(as.numeric(Value), 2)  
+      ) %>%
+      filter(!is.na(Country)) %>%  
+      select(Country, Year, Age, !!value_col_name := Value)}
+
+labour_force <- clean_data(labour_force, "Labour_Force")
+employment_rate <- clean_data(employment_rate, "Employment_Rate")
+unemployment_pop <- clean_data(unemployment_pop, "Unemployed")
+
+# Cleaning Part 2
+skill_mapping <- c(
+  "01" = "Arts and humanities knowledge",
+  "02" = "Attitudes",
+  "03" = "Business processes",
+  "04" = "Cognitive skills",
+  "05" = "Communication skills",
+  "06" = "Digital skills",
+  "07" = "Law and public safety knowledge",
+  "08" = "Medicine knowledge",
+  "09" = "Physical skills",
+  "10" = "Production and technology knowledge",
+  "11" = "Resource management",
+  "12" = "Scientific knowledge",
+  "13" = "Social skills",
+  "14" = "Training and education")
+
+cleaned_data <- skills_data %>%
+  select(Country = LOCATION, Skill = SKILL, Value = OBS_VALUE) %>%
+  mutate(
+    Country = country_mapping[Country],
+    Skill = skill_mapping[Skill],
+    Value = as.numeric(Value)) %>%
+    filter(!is.na(Country), !is.na(Skill), !is.na(Value))
+
+# Cleaning Part 3
+c_data <- wage_data %>%
+  select(Country = REF_AREA, Year = TIME_PERIOD, Wage = OBS_VALUE) %>%
+  mutate(
+    Country = country_mapping[Country],
+    Year = as.integer(Year),
+    Wage = as.numeric(Wage)) %>%
+  filter(!is.na(Country), !is.na(Year), !is.na(Wage)) %>%
+  group_by(Country, Year) %>%
+  summarise(Wage = mean(Wage, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+
+```{r R Shiny & Plotly}
+# UI
+ui <- navbarPage(
+  "Labor Market Dashboard",
+  
+  # Part 1
+  tabPanel("Labor Market",
+           titlePanel("Labor Market Evolution"),
+           sidebarLayout(
+             sidebarPanel(
+               sliderInput("year_range", "Select Year Range:",
+                           min = min(labour_force$Year), max = max(labour_force$Year),
+                           value = c(min(labour_force$Year), max(labour_force$Year)),
+                           sep = "", step = 1, ticks = TRUE),
+               
+               checkboxGroupInput("age_group", "Select Age Groups:",
+                                  choices = unique(labour_force$Age),
+                                  selected = unique(labour_force$Age)),
+               
+               selectInput("country", "Select a Country:",
+                           choices = unique(labour_force$Country),
+                           selected = "France")),
+             
+             mainPanel(
+               tabsetPanel(
+                 tabPanel("Labor Force", plotlyOutput("labour_force_plot")),
+                 tabPanel("Employment Rate", plotlyOutput("employment_rate_plot")),
+                 tabPanel("Unemployment", plotlyOutput("unemployment_plot")))))),
+  
+  # Part 2
+  tabPanel("Skills Demand",
+           sidebarLayout(
+             sidebarPanel(
+               radioButtons("selection_type", "Choose Filter Type:",
+                            choices = c("Country", "Skill")),
+               
+               uiOutput("dynamic_input")),
+             
+             mainPanel(plotlyOutput("column_chart")))),
+  
+  # Part 3
+  tabPanel("Average Wages",
+           sidebarLayout(
+             sidebarPanel(
+               sliderInput("year_range_wages", "Select Year Range:",
+                           min = min(c_data$Year), max = max(c_data$Year),
+                           value = c(min(c_data$Year), max(c_data$Year)),
+                           step = 1, sep = ""),
+               
+               selectInput("selected_country_wages", "Select a Country:",
+                           choices = unique(c_data$Country),
+                           selected = "France")),
+             
+             mainPanel(plotlyOutput("wage_plot"))))) 
+
+# Serveur
+server <- function(input, output) {
+  
+  # Part 1 - Labor Market
+  filtered_data <- reactive({
+    labour_force %>%
+      filter(Year >= input$year_range[1], Year <= input$year_range[2],
+             Age %in% input$age_group, Country == input$country)})
+  
+  employment_filtered <- reactive({
+    employment_rate %>%
+      filter(Year >= input$year_range[1], Year <= input$year_range[2],
+             Age %in% input$age_group, Country == input$country)})
+  
+  unemployment_filtered <- reactive({
+    unemployment_pop %>%
+      filter(Year >= input$year_range[1], Year <= input$year_range[2],
+             Age %in% input$age_group, Country == input$country)})
+  
+  output$labour_force_plot <- renderPlotly({
+    ggplot(filtered_data(), aes(x = as.integer(Year), y = Labour_Force, color = Age)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2) +
+      labs(title = "Labor Force Evolution", y = "Labor Force (Thousands)", x = "Year") +
+      scale_x_continuous(breaks = seq(min(filtered_data()$Year), max(filtered_data()$Year), by = 1)) +
+      theme_minimal() +
+      scale_color_manual(values = c("lightblue", "turquoise", "darkblue"))})
+  
+  output$employment_rate_plot <- renderPlotly({
+    ggplot(employment_filtered(), aes(x = as.integer(Year), y = Employment_Rate, color = Age)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2) +
+      labs(title = "Employment Rate Evolution", y = "Employment Rate (%)", x = "Year") +
+      scale_x_continuous(breaks = seq(min(employment_filtered()$Year), max(employment_filtered()$Year), by = 1)) +
+      theme_minimal() +
+      scale_color_manual(values = c("lightblue", "turquoise", "darkblue"))})
+  
+  output$unemployment_plot <- renderPlotly({
+    ggplot(unemployment_filtered(), aes(x = as.integer(Year), y = Unemployed, color = Age)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2) +
+      labs(title = "Unemployment Population Evolution", y = "Unemployed (Thousands)", x = "Year") +
+      scale_x_continuous(breaks = seq(min(unemployment_filtered()$Year), max(unemployment_filtered()$Year), by = 1)) +
+      theme_minimal() +
+      scale_color_manual(values = c("lightblue", "turquoise", "darkblue"))})
+  
+  
+  # Part 2 - Skills Demand
+  output$dynamic_input <- renderUI({
+    if (input$selection_type == "Country") {
+      selectInput("selected_country", "Select a Country:",
+                  choices = unique(cleaned_data$Country),
+                  selected = "France")} 
+    else {
+      selectInput("selected_skill", "Select a Skill:",
+                  choices = unique(cleaned_data$Skill),
+                  selected = "Cognitive skills")}})
+  
+  filtered_data2 <- reactive({
+    if (input$selection_type == "Country") {
+      cleaned_data %>%
+        filter(Country == input$selected_country)}
+    else {
+      cleaned_data %>%
+        filter(Skill == input$selected_skill)}})
+  
+  output$column_chart <- renderPlotly({
+    if (input$selection_type == "Country") {
+      plot <- ggplot(filtered_data2(), aes(x = Skill, y = Value, fill = Value)) +
+        geom_col() +
+        scale_fill_gradientn(colors = c("yellow", "orange", "red")) +
+        labs(title = paste("Skill Demand in", input$selected_country),
+             x = "Skill", y = "Value") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              legend.position = "none")} 
+    else {
+      plot <- ggplot(filtered_data2(), aes(x = Country, y = Value, fill = Value)) +
+        geom_col() +
+        scale_fill_gradientn(colors = c("yellow", "orange", "red")) +
+        labs(title = paste("Skill Demand for", input$selected_skill),
+             x = "Country", y = "Value") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              legend.position = "none")}
+    
+    ggplotly(plot, tooltip = c("x", "y"))})
+  
+  
+  # Part 3 - Average Wages
+  filtered_data3 <- reactive({
+    c_data %>%
+      filter(Year >= input$year_range_wages[1], Year <= input$year_range_wages[2],
+             Country == input$selected_country_wages)})
+  
+  output$wage_plot <- renderPlotly({
+    plot <- ggplot(filtered_data3(), aes(x = Year, y = Wage, group = Country)) +
+      geom_line(size = 1.5, color = "lightgreen") +
+      geom_point(size = 3, color = "green") +
+      scale_x_continuous(breaks = seq(min(filtered_data3()$Year), max(filtered_data3()$Year), by = 1)) +  
+      labs(title = paste("Average Wage Evolution in", input$selected_country_wages),
+           x = "Year", y = "Average Wage (EUR)") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    ggplotly(plot)})}
+
+# App R Shiny
+shinyApp(ui = ui, server = server)
+
+```
+
