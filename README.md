@@ -2,6 +2,12 @@
 This project presents an interactive dashboard to explore trends in the labour market using **OECD data**.  
 Built with **R Shiny** and **Plotly**, the dashboard analyzes employment, unemployment, skill demands, and average wages across countries and age groups.
 
+<p align="center">
+  <img src="https://cdn.corporatefinanceinstitute.com/assets/labor-market.jpeg" 
+       alt="Labour Market" 
+       width="400"/>
+</p>
+
 
 ## Project Overview
 - **Objective**: Build an interactive R Shiny dashboard for the OECD to visualize key labour market indicators.
